@@ -1,0 +1,140 @@
+# "version" line removed to fix the warning
+services:
+
+  # ----------------------------
+  # 1. Postgres metadata DB (Airflow's brain)
+  # ----------------------------
+  postgres:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres-db-volume:/var/lib/postgresql/data
+    ports:
+      - "5435:5432"  # External port 5435
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      retries: 5
+
+  # ----------------------------
+  # 2. Postgres staging DB (shopzada)
+  # ----------------------------
+  postgres-staging:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: shopzada
+    volumes:
+      - postgres-staging-db-volume:/var/lib/postgresql/data
+    ports:
+      - "5436:5432" # External port 5436
+    healthcheck:
+      # FIXED: Added "-d shopzada" to check the specific DB name
+      test: ["CMD", "pg_isready", "-U", "airflow", "-d", "shopzada"]
+      interval: 5s
+      retries: 5
+
+  # ----------------------------
+  # 3. Postgres DW DB (dw_db)
+  # ----------------------------
+  postgres-dw:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: dw_user
+      POSTGRES_PASSWORD: dw_pass
+      POSTGRES_DB: dw_db
+    volumes:
+      - postgres-dw-db-volume:/var/lib/postgresql/data
+    ports:
+      - "5437:5432" # External port 5437
+    healthcheck:
+      # FIXED: Added "-d dw_db" to check the specific DB name
+      test: ["CMD", "pg_isready", "-U", "dw_user", "-d", "dw_db"]
+      interval: 5s
+      retries: 5
+
+  # ----------------------------
+  # 4. pgAdmin
+  # ----------------------------
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+    depends_on:
+      - postgres
+      - postgres-staging
+      - postgres-dw
+
+  # ----------------------------
+  # 5. Airflow webserver + scheduler
+  # ----------------------------
+  airflow:
+    build:
+      context: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+      postgres-staging:
+        condition: service_healthy
+      postgres-dw:
+        condition: service_healthy
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      # Metadata DB Connection
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+      AIRFLOW__WEBSERVER__RBAC: "True"
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "True"
+      AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT: 120
+      
+      # Auto-Connections for your DAGs
+      AIRFLOW_CONN_POSTGRES_METADATA: postgresql://airflow:airflow@postgres:5432/airflow
+      AIRFLOW_CONN_POSTGRES_STAGING: postgresql://airflow:airflow@postgres-staging:5432/shopzada
+      AIRFLOW_CONN_POSTGRES_DW: postgresql://dw_user:dw_pass@postgres-dw:5432/dw_db
+
+    volumes:
+      # Department folders as requested
+      - ./Marketing Department:/opt/airflow/marketing_department
+      - ./Enterprise Department:/opt/airflow/enterprise_department
+      - ./Customer Management Department:/opt/airflow/customer_management_department
+      - ./Business Department:/opt/airflow/business_department
+      - ./Operations Department:/opt/airflow/operations_department
+      # Standard Airflow folders
+      - ./dags:/opt/airflow/dags
+      - ./data:/opt/airflow/data
+      - ./logs:/opt/airflow/logs
+      - ./plugins:/opt/airflow/plugins
+
+    ports:
+      - "8080:8080"
+    
+    # Command to Init DB, Create User, Start Webserver & Scheduler in background
+    command: >
+      bash -c "
+      airflow db init &&
+      airflow users create \
+        --username admin \
+        --firstname Air \
+        --lastname Flow \
+        --role Admin \
+        --email admin@example.com \
+        --password admin || true &&
+      airflow webserver &
+      sleep 5 &&
+      airflow scheduler
+      "
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      retries: 5
+
+volumes:
+  postgres-db-volume:
+  postgres-staging-db-volume:
+  postgres-dw-db-volume:
